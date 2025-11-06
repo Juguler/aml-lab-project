@@ -1,10 +1,10 @@
 """
-Training and validation utilities
+Training and validation utilities with Weights & Biases integration
 """
 import torch
 
 
-def train_one_epoch(epoch, model, train_loader, criterion, optimizer, device='cuda'):
+def train_one_epoch(epoch, model, train_loader, criterion, optimizer, device='cuda', wandb_log=None):
     """
     Train the model for one epoch
     
@@ -15,6 +15,7 @@ def train_one_epoch(epoch, model, train_loader, criterion, optimizer, device='cu
         criterion: Loss function
         optimizer: Optimizer
         device: Device to train on (default: 'cuda')
+        wandb_log: wandb logging object (optional)
     
     Returns:
         tuple: (train_loss, train_accuracy)
@@ -37,15 +38,31 @@ def train_one_epoch(epoch, model, train_loader, criterion, optimizer, device='cu
         _, predicted = outputs.max(1)
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
+        
+        # Log batch metrics to wandb
+        if wandb_log is not None and batch_idx % 50 == 0:
+            wandb_log.log({
+                'train/batch_loss': loss.item(),
+                'train/batch_acc': 100. * predicted.eq(targets).sum().item() / targets.size(0),
+                'train/step': epoch * len(train_loader) + batch_idx
+            })
 
     train_loss = running_loss / len(train_loader)
     train_accuracy = 100. * correct / total
     print(f'Train Epoch: {epoch} Loss: {train_loss:.6f} Acc: {train_accuracy:.2f}%')
     
+    # Log epoch metrics to wandb
+    if wandb_log is not None:
+        wandb_log.log({
+            'train/epoch_loss': train_loss,
+            'train/epoch_acc': train_accuracy,
+            'epoch': epoch
+        })
+    
     return train_loss, train_accuracy
 
 
-def validate(model, val_loader, criterion, device='cuda'):
+def validate(model, val_loader, criterion, device='cuda', wandb_log=None, epoch=None):
     """
     Validate the model
     
@@ -54,6 +71,8 @@ def validate(model, val_loader, criterion, device='cuda'):
         val_loader: Validation data loader
         criterion: Loss function
         device: Device to validate on (default: 'cuda')
+        wandb_log: wandb logging object (optional)
+        epoch: Current epoch number (optional)
     
     Returns:
         tuple: (val_loss, val_accuracy)
@@ -78,6 +97,16 @@ def validate(model, val_loader, criterion, device='cuda'):
     val_accuracy = 100. * correct / total
 
     print(f'Validation Loss: {val_loss:.6f} Acc: {val_accuracy:.2f}%')
+    
+    # Log validation metrics to wandb
+    if wandb_log is not None:
+        log_dict = {
+            'val/loss': val_loss,
+            'val/accuracy': val_accuracy,
+        }
+        if epoch is not None:
+            log_dict['epoch'] = epoch
+        wandb_log.log(log_dict)
     
     return val_loss, val_accuracy
 

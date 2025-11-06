@@ -1,5 +1,6 @@
 """
 Main training script for Tiny-ImageNet classification with CustomNet
+Integrated with Weights & Biases for experiment tracking
 """
 import os
 import argparse
@@ -12,8 +13,40 @@ from dataset.tiny_imagenet import get_tiny_imagenet_datasets, prepare_tiny_image
 from utils.train_utils import train_one_epoch, validate, save_checkpoint
 from utils.visualization import plot_training_curves, show_sample_images
 
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+    print("Warning: wandb not available. Install with: pip install wandb")
+
 
 def main(args):
+    # Initialize Weights & Biases
+    if args.use_wandb and WANDB_AVAILABLE:
+        wandb.init(
+            project=args.wandb_project,
+            name=args.wandb_run_name,
+            config={
+                'epochs': args.num_epochs,
+                'batch_size': args.batch_size,
+                'learning_rate': args.lr,
+                'momentum': args.momentum,
+                'weight_decay': args.weight_decay,
+                'architecture': 'CustomNet',
+                'dataset': 'Tiny-ImageNet',
+                'num_classes': args.num_classes,
+                'input_size': args.input_size,
+            },
+            tags=['lab03', 'tiny-imagenet', 'custom-cnn']
+        )
+        # Watch the model (logs gradients and parameters)
+        print("✓ Weights & Biases initialized")
+    else:
+        wandb = None
+        if args.use_wandb:
+            print("Warning: Wandb requested but not available")
+    
     # Set device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'Using device: {device}')
@@ -53,6 +86,10 @@ def main(args):
     print("Initializing model...")
     model = CustomNet(num_classes=args.num_classes).to(device)
     
+    # Watch model with wandb
+    if args.use_wandb and WANDB_AVAILABLE:
+        wandb.watch(model, log='all', log_freq=100)
+    
     # Loss and optimizer
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.SGD(
@@ -88,24 +125,39 @@ def main(args):
         
         # Train
         train_loss, train_acc = train_one_epoch(
-            epoch, model, train_loader, criterion, optimizer, device
+            epoch, model, train_loader, criterion, optimizer, device,
+            wandb_log=wandb if args.use_wandb and WANDB_AVAILABLE else None
         )
         train_losses.append(train_loss)
         train_accs.append(train_acc)
         
         # Validate
-        val_loss, val_acc = validate(model, val_loader, criterion, device)
+        val_loss, val_acc = validate(
+            model, val_loader, criterion, device,
+            wandb_log=wandb if args.use_wandb and WANDB_AVAILABLE else None,
+            epoch=epoch
+        )
         val_losses.append(val_loss)
         val_accs.append(val_acc)
         
         # Update learning rate
+        current_lr = scheduler.get_last_lr()[0]
         scheduler.step()
+        
+        # Log learning rate to wandb
+        if args.use_wandb and WANDB_AVAILABLE:
+            wandb.log({'learning_rate': current_lr, 'epoch': epoch})
         
         # Save checkpoint if best model
         if val_acc > best_acc:
             best_acc = val_acc
             checkpoint_path = os.path.join(args.checkpoint_dir, 'best_model.pth')
             save_checkpoint(model, optimizer, epoch, best_acc, checkpoint_path)
+            
+            # Log best accuracy to wandb
+            if args.use_wandb and WANDB_AVAILABLE:
+                wandb.run.summary['best_val_accuracy'] = best_acc
+                wandb.save(checkpoint_path)
         
         # Save latest checkpoint
         if epoch % args.save_freq == 0:
@@ -121,6 +173,14 @@ def main(args):
         train_losses, train_accs, val_losses, val_accs,
         save_path=os.path.join(args.output_dir, 'training_curves.png')
     )
+    
+    # Log final training curves to wandb
+    if args.use_wandb and WANDB_AVAILABLE:
+        wandb.log({
+            'training_curves': wandb.Image(os.path.join(args.output_dir, 'training_curves.png'))
+        })
+        wandb.finish()
+        print("✓ Wandb run completed and logged")
     
     print(f"\nAll outputs saved to {args.output_dir}")
 
@@ -167,6 +227,14 @@ if __name__ == '__main__':
     # Visualization
     parser.add_argument('--show_samples', action='store_true',
                         help='Show sample images before training')
+    
+    # Weights & Biases parameters
+    parser.add_argument('--use_wandb', action='store_true',
+                        help='Use Weights & Biases for experiment tracking')
+    parser.add_argument('--wandb_project', type=str, default='tiny-imagenet-lab03',
+                        help='Wandb project name')
+    parser.add_argument('--wandb_run_name', type=str, default=None,
+                        help='Wandb run name (optional)')
     
     args = parser.parse_args()
     main(args)
